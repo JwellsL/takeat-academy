@@ -2,30 +2,47 @@ name: Android APK
 on:
   push: { branches: [main] }
   workflow_dispatch:
+permissions: { contents: write }
+concurrency: { group: apk, cancel-in-progress: false }
 jobs:
   apk:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - name: Extrair projeto
-        run: |
-          mkdir app && cd app && unzip -q ../projeto.zip
+        run: mkdir app && cd app && unzip -q ../projeto.zip
       - uses: actions/setup-node@v5
         with: { node-version: 22 }
       - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: 21 }
+      - name: Chave de assinatura fixa
+        run: |
+          if [ ! -f academy.keystore ]; then
+            keytool -genkeypair -keystore academy.keystore -alias academy -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass takeatacademy -keypass takeatacademy -dname "CN=Takeat Academy, O=Takeat, C=BR"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+            git add academy.keystore && git commit -m "chore: chave de assinatura do APK [skip ci]" && git push
+          fi
       - name: Build web
         working-directory: app
+        env: { VITE_BUILD: '${{ github.run_number }}' }
         run: npm install --no-audit --no-fund && npm run build
       - name: Compilar APK
         working-directory: app
+        env: { BUILD_NUMBER: '${{ github.run_number }}', ACADEMY_KEYSTORE: '${{ github.workspace }}/academy.keystore' }
         run: |
           npx cap sync android
-          cd android
-          sed -i 's/\r$//' gradlew
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          cd android && sed -i 's/\r$//' gradlew && chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../../takeat-academy-build-${{ github.run_number }}.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: takeat-academy-debug-apk
-          path: app/android/app/build/outputs/apk/debug/app-debug.apk
+          name: takeat-academy-build-${{ github.run_number }}
+          path: takeat-academy-build-${{ github.run_number }}.apk
+      - name: Publicar release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Academy build ${{ github.run_number }}
+          files: takeat-academy-build-${{ github.run_number }}.apk
+          make_latest: true
